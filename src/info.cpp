@@ -49,18 +49,8 @@ void Info::print_logo() const {
 void Info::print_initialize(LBM* lbm) {
 	info.allow_printing.lock(); // disable print_update() until print_initialize() has finished
 	this->lbm = lbm;
-#if defined(SRT)
-	collision = "SRT";
-#elif defined(TRT)
-	collision = "TRT";
-#endif // TRT
-#if defined(FP16S)
-	collision += " (FP32/FP16S)";
-#elif defined(FP16C)
-	collision += " (FP32/FP16C)";
-#else // FP32
-	collision += " (FP32/FP32)";
-#endif // FP32
+	collision = lbm->lbm_domain[0]->get_collision_type()=="SRT" ? "SRT" : "TRT";
+	collision += " ("+lbm->lbm_domain[0]->get_precision_label()+")";
 	bool all_domains_use_ram = true; // reset cpu/gpu_mem_required to get valid values for consecutive simulations
 	for(uint d=0u; d<lbm->get_D(); d++) {
 		all_domains_use_ram = all_domains_use_ram&&lbm->lbm_domain[d]->get_device().info.uses_ram;
@@ -93,12 +83,8 @@ void Info::print_initialize(LBM* lbm) {
 	println("| Thermal Diff.   | "+alignr(57u, /**********************************************************************************/ to_string(lbm->get_alpha(), 8u))+" |");
 	println("| Thermal Exp.    | "+alignr(57u, /***********************************************************************************/ to_string(lbm->get_beta(), 8u))+" |");
 #endif // TEMPERATURE
-#ifndef INTERACTIVE_GRAPHICS_ASCII
 	println("|---------.-------'-----.-----------.-------------------.---------------------|");
 	println("| MLUPs   | Bandwidth   | Steps/s   | Current Step      | "+string(steps==max_ulong?"Elapsed Time  ":"Time Remaining")+"      |");
-#else // INTERACTIVE_GRAPHICS_ASCII
-	println("'-----------------'-----------------------------------------------------------'");
-#endif // INTERACTIVE_GRAPHICS_ASCII
 	clock.start();
 	info.allow_printing.unlock();
 }
@@ -112,16 +98,6 @@ void Info::print_update() const {
 		(steps==max_ulong ? alignr(17, lbm->get_t()) : alignr(12, lbm->get_t())+" "+print_percentage((float)(lbm->get_t()-steps_last)/(float)steps))+" | "+ // current step
 		alignr(19, print_time(time()))+" |" // either elapsed time or remaining time
 	);
-#ifdef GRAPHICS
-	if(key_G) { // print camera settings
-		const string camera_position = "float3("+alignr(9u, to_string(camera.pos.x/(float)lbm->get_Nx(), 6u))+"f*(float)Nx, "+alignr(9u, to_string(camera.pos.y/(float)lbm->get_Ny(), 6u))+"f*(float)Ny, "+alignr(9u, to_string(camera.pos.z/(float)lbm->get_Nz(), 6u))+"f*(float)Nz)";
-		const string camera_rx_ry_fov = alignr(6u, to_string(degrees(camera.rx)-90.0, 1u))+"f, "+alignr(5u, to_string(180.0-degrees(camera.ry), 1u))+"f, "+alignr(5u, to_string(camera.fov, 1u))+"f";
-		const string camera_zoom = alignr(8u, to_string(camera.zoom*(float)fmax(fmax(lbm->get_Nx(), lbm->get_Ny()), lbm->get_Nz())/(float)min(camera.width, camera.height), 6u))+"f";
-		if(camera.free) println("\rlbm.graphics.set_camera_free("+camera_position+", "+camera_rx_ry_fov+");");
-		else println("\rlbm.graphics.set_camera_centered("+camera_rx_ry_fov+", "+camera_zoom+");          ");
-		key_G = false;
-	}
-#endif // GRAPHICS
 	info.allow_printing.unlock();
 }
 void Info::print_finalize() {

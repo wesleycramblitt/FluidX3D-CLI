@@ -4,7 +4,7 @@
 
 #ifdef BENCHMARK
 #include "info.hpp"
-void main_setup() { // benchmark; required extensions in defines.hpp: BENCHMARK, optionally FP16S or FP16C
+/*void main_setup() { // benchmark; required extensions in defines.hpp: BENCHMARK, optionally FP16S or FP16C
 	// ################################################################## define simulation box size, viscosity and volume force ###################################################################
 	uint mlups = 0u; {
 
@@ -32,7 +32,7 @@ void main_setup() { // benchmark; required extensions in defines.hpp: BENCHMARK,
 #if defined(_WIN32)
 	wait();
 #endif // Windows
-} /**/
+} */
 #endif // BENCHMARK
 
 
@@ -56,11 +56,11 @@ void main_setup() { // benchmark; required extensions in defines.hpp: BENCHMARK,
 	lbm.graphics.visualization_modes = VIS_STREAMLINES;
 	lbm.run();
 	//lbm.run(1000u); lbm.u.read_from_device(); println(lbm.u.x[lbm.index(Nx/2u, Ny/2u, Nz/2u)]); wait(); // test for binary identity
-} /**/
+} */
 
 
 
-/*void main_setup() { // 2D Taylor-Green vortices (use D2Q9); required extensions in defines.hpp: INTERACTIVE_GRAPHICS
+void main_setup() { // 2D Taylor-Green vortices (use D2Q9); required extensions in defines.hpp: INTERACTIVE_GRAPHICS
 	// ################################################################## define simulation box size, viscosity and volume force ###################################################################
 	LBM lbm(1024u, 1024u, 1u, 0.02f);
 	// ###################################################################################### define geometry ######################################################################################
@@ -74,10 +74,9 @@ void main_setup() { // benchmark; required extensions in defines.hpp: BENCHMARK,
 		lbm.u.y[n] = -A*sinf(2.0f*pif*fx/a)*cosf(2.0f*pif*fy/b);
 		lbm.rho[n] = 1.0f-sq(A)*3.0f/4.0f*(cosf(4.0f*pif*fx/a)+cosf(4.0f*pif*fy/b));
 	}); // ####################################################################### run simulation, export images and data ##########################################################################
-	lbm.graphics.visualization_modes = VIS_FIELD;
-	lbm.graphics.slice_mode = 3;
+	// visualization handled by external UI
 	lbm.run();
-} /**/
+} 
 
 
 

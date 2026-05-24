@@ -2,6 +2,7 @@
 
 #include "utilities.hpp"
 #include <mutex>
+#include <atomic>
 
 class LBM;
 struct Info { // contains redundant information for console printing
@@ -22,3 +23,5 @@ struct Info { // contains redundant information for console printing
 	void print_finalize(); // disables interactive rendering
 };
 extern Info info; // declared in info.cpp
+extern vector<string> main_arguments; // console arguments
+extern std::atomic_bool running; // simulation running flag

@@ -2,7 +2,6 @@
 
 #define UTILITIES_REGEX
 #define UTILITIES_FILE
-#define UTILITIES_PNG
 #define UTILITIES_CONSOLE_COLOR
 #define UTILITIES_CONSOLE_INPUT
 #define UTILITIES_CONSOLE_DITHER_LOOKUP
@@ -4408,35 +4407,6 @@ inline void write_qoi(const string& filename, const Image* image) { // 3-channel
 	file.close();
 	delete[] data;
 }
-#ifdef UTILITIES_PNG
-#include "lodepng.hpp"
-inline Image* read_png(const string& filename, Image* image=nullptr) {
-	uint width=0u, height=0u;
-	vector<uchar> data;
-	lodepng::decode(data, width, height, create_file_extension(filename, ".png"), LCT_RGB);
-	if(image==nullptr||image->width()!=width||image->height()!=height) {
-		delete image;
-		image = new Image(width, height);
-	}
-	for(uint i=0u; i<width*height; i++) {
-		image->set_color(i, data[3u*i]<<16|data[3u*i+1u]<<8|data[3u*i+2u]);
-	}
-	return image;
-}
-inline void write_png(const string& filename, const Image* image) {
-	create_folder(filename);
-	uchar* data = new uchar[3u*image->length()];
-	for(uint i=0u; i<image->length(); i++) {
-		const int color = image->color(i);
-		data[3u*i   ] = (color>>16)&255;
-		data[3u*i+1u] = (color>> 8)&255;
-		data[3u*i+2u] =  color     &255;
-	}
-	lodepng::encode(create_file_extension(filename, ".png"), data, image->width(), image->height(), LCT_RGB);
-	delete[] data;
-}
-#endif // UTILITIES_PNG
-
 struct Mesh { // triangle mesh
 	uint triangle_number = 0u;
 	float3 center, pmin, pmax;

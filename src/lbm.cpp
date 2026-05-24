@@ -4,82 +4,64 @@
 
 Units units; // for unit conversion
 
+// Compile-time velocity set constants (used by backward-compat constructors)
 #if defined(D2Q9)
-const uint velocity_set = 9u;
-const uint dimensions = 2u;
-const uint transfers = 3u;
+static const uint velocity_set = 9u;
+static const uint dimensions = 2u;
+static const uint transfers = 3u;
 #elif defined(D3Q15)
-const uint velocity_set = 15u;
-const uint dimensions = 3u;
-const uint transfers = 5u;
+static const uint velocity_set = 15u;
+static const uint dimensions = 3u;
+static const uint transfers = 5u;
 #elif defined(D3Q19)
-const uint velocity_set = 19u;
-const uint dimensions = 3u;
-const uint transfers = 5u;
+static const uint velocity_set = 19u;
+static const uint dimensions = 3u;
+static const uint transfers = 5u;
 #elif defined(D3Q27)
-const uint velocity_set = 27u;
-const uint dimensions = 3u;
-const uint transfers = 9u;
-#endif // D3Q27
+static const uint velocity_set = 27u;
+static const uint dimensions = 3u;
+static const uint transfers = 9u;
+#endif
 
-uint bytes_per_cell_host() { // returns the number of Bytes per cell allocated in host memory
+uint bytes_per_cell_host(const SimulationConfig& cfg) { // returns the number of Bytes per cell allocated in host memory
 	uint bytes_per_cell = 17u; // rho, u, flags
-#ifdef FORCE_FIELD
-	bytes_per_cell += 12u; // F
-#endif // FORCE_FIELD
-#ifdef SURFACE
-	bytes_per_cell += 4u; // phi
-#endif // SURFACE
-#ifdef TEMPERATURE
-	bytes_per_cell += 4u; // T
-#endif // TEMPERATURE
+	if(cfg.force_field) bytes_per_cell += 12u;
+	if(cfg.surface)     bytes_per_cell += 4u;
+	if(cfg.temperature) bytes_per_cell += 4u;
 	return bytes_per_cell;
 }
-uint bytes_per_cell_device() { // returns the number of Bytes per cell allocated in device memory
-	uint bytes_per_cell = velocity_set*sizeof(fpxx)+17u; // fi, rho, u, flags
-#ifdef FORCE_FIELD
-	bytes_per_cell += 12u; // F
-#endif // FORCE_FIELD
-#ifdef SURFACE
-	bytes_per_cell += 12u; // phi, mass, flags
-#endif // SURFACE
-#ifdef TEMPERATURE
-	bytes_per_cell += 7u*sizeof(fpxx)+4u; // gi, T
-#endif // TEMPERATURE
+uint bytes_per_cell_device(const SimulationConfig& cfg) { // returns the number of Bytes per cell allocated in device memory
+	uint bytes_per_cell = cfg.velocity_set*sizeof(fpxx)+17u; // fi, rho, u, flags
+	if(cfg.force_field) bytes_per_cell += 12u;
+	if(cfg.surface)     bytes_per_cell += 12u;
+	if(cfg.temperature) bytes_per_cell += 7u*sizeof(fpxx)+4u;
 	return bytes_per_cell;
 }
-uint bandwidth_bytes_per_cell_device() { // returns the bandwidth in Bytes per cell per time step from/to device memory
-	uint bandwidth_bytes_per_cell = velocity_set*2u*sizeof(fpxx)+1u; // lattice.set()*2*fi, flags
-#ifdef UPDATE_FIELDS
-	bandwidth_bytes_per_cell += 16u; // rho, u
-#ifdef TEMPERATURE
-	bandwidth_bytes_per_cell += 4u; // T
-#endif // TEMPERATURE
-#endif // UPDATE_FIELDS
-#ifdef FORCE_FIELD
-	bandwidth_bytes_per_cell += 12u; // F
-#endif // FORCE_FIELD
-#if defined(MOVING_BOUNDARIES)||defined(SURFACE)||defined(TEMPERATURE)
-	bandwidth_bytes_per_cell += (velocity_set-1u)*1u; // neighbor flags have to be loaded
-#endif // MOVING_BOUNDARIES, SURFACE or TEMPERATURE
-#ifdef SURFACE
-	bandwidth_bytes_per_cell += (1u+(2u*velocity_set-1u)*sizeof(fpxx)+8u+(velocity_set-1u)*4u) + 1u + 1u + (4u+velocity_set+4u+4u+4u); // surface_0 (flags, fi, mass, massex), surface_1 (flags), surface_2 (flags), surface_3 (rho, flags, mass, massex, phi)
-#endif // SURFACE
-#ifdef TEMPERATURE
-	bandwidth_bytes_per_cell += 7u*2u*sizeof(fpxx); // 2*gi
-#endif // TEMPERATURE
+uint bandwidth_bytes_per_cell_device(const SimulationConfig& cfg) { // returns the bandwidth in Bytes per cell per time step from/to device memory
+	uint bandwidth_bytes_per_cell = cfg.velocity_set*2u*sizeof(fpxx)+1u;
+	if(cfg.update_fields()) {
+		bandwidth_bytes_per_cell += 16u;
+		if(cfg.temperature) bandwidth_bytes_per_cell += 4u;
+	}
+	if(cfg.force_field) bandwidth_bytes_per_cell += 12u;
+	if(cfg.moving_boundaries || cfg.surface || cfg.temperature)
+		bandwidth_bytes_per_cell += (cfg.velocity_set-1u)*1u;
+	if(cfg.surface)
+		bandwidth_bytes_per_cell += (1u+(2u*cfg.velocity_set-1u)*sizeof(fpxx)+8u+(cfg.velocity_set-1u)*4u) + 1u + 1u + (4u+cfg.velocity_set+4u+4u+4u);
+	if(cfg.temperature)
+		bandwidth_bytes_per_cell += 7u*2u*sizeof(fpxx);
 	return bandwidth_bytes_per_cell;
 }
-uint3 resolution(const float3 box_aspect_ratio, const uint memory) { // input: simulation box aspect ratio and VRAM occupation in MB, output: grid resolution
-#ifndef D2Q9
-	float memory_required = (box_aspect_ratio.x*box_aspect_ratio.y*box_aspect_ratio.z)*(float)bytes_per_cell_device()/1048576.0f; // in MB
-	float scaling = cbrt((float)memory/memory_required);
-	return uint3(to_uint(scaling*box_aspect_ratio.x), to_uint(scaling*box_aspect_ratio.y), to_uint(scaling*box_aspect_ratio.z));
-#else // D2Q9
-	float memory_required = (box_aspect_ratio.x*box_aspect_ratio.y)*(float)bytes_per_cell_device()/1048576.0f; // in MB
-	float scaling = sqrt((float)memory/memory_required);
-	return uint3(to_uint(scaling*box_aspect_ratio.x), to_uint(scaling*box_aspect_ratio.y), 1u);
-#endif // D2Q9
+uint3 resolution(const float3 box_aspect_ratio, const uint memory, const SimulationConfig& cfg) { // input: simulation box aspect ratio and VRAM occupation in MB, output: grid resolution
+	if(cfg.dimensions()==2u) {
+		float memory_required = (box_aspect_ratio.x*box_aspect_ratio.y)*(float)bytes_per_cell_device(cfg)/1048576.0f; // in MB
+		float scaling = sqrt((float)memory/memory_required);
+		return uint3(to_uint(scaling*box_aspect_ratio.x), to_uint(scaling*box_aspect_ratio.y), 1u);
+	} else {
+		float memory_required = (box_aspect_ratio.x*box_aspect_ratio.y*box_aspect_ratio.z)*(float)bytes_per_cell_device(cfg)/1048576.0f; // in MB
+		float scaling = cbrt((float)memory/memory_required);
+		return uint3(to_uint(scaling*box_aspect_ratio.x), to_uint(scaling*box_aspect_ratio.y), to_uint(scaling*box_aspect_ratio.z));
+	}
 }
 
 string default_filename(const string& path, const string& name, const string& extension, const ulong t) { // generate a default filename with timestamp
@@ -103,19 +85,81 @@ LBM_Domain::LBM_Domain(const Device_Info& device_info, const uint Nx, const uint
 	this->alpha = alpha; this->beta = beta;
 	this->particles_N = particles_N;
 	this->particles_rho = particles_rho;
+	// Set runtime extension flags from compile-time defines (backward compat)
+	this->velocity_set = ::velocity_set; this->dims = (uint)dimensions; this->trans = (uint)transfers;
+	this->fp_precision = 0;
+#ifdef FP16S
+	this->fp_precision = 1;
+#endif
+#ifdef FP16C
+	this->fp_precision = 2;
+#endif
+#ifdef TRT
+	this->use_srt = false;
+#endif
+#ifdef VOLUME_FORCE
+	this->has_volume_force = true;
+#endif
+#ifdef FORCE_FIELD
+	this->has_force_field = true;
+#endif
+#ifdef EQUILIBRIUM_BOUNDARIES
+	this->has_equilibrium_boundaries = true;
+#endif
+#ifdef MOVING_BOUNDARIES
+	this->has_moving_boundaries = true;
+#endif
+#ifdef SURFACE
+	this->has_surface = true;
+#endif
+#ifdef TEMPERATURE
+	this->has_temperature = true;
+#endif
+#ifdef SUBGRID
+	this->has_subgrid = true;
+#endif
+#ifdef PARTICLES
+	this->has_particles = true;
+#endif
+	this->has_update_fields = this->has_surface || this->has_particles;
+#ifdef UPDATE_FIELDS
+	this->has_update_fields = true;
+#endif
 	string opencl_c_code;
-#ifdef GRAPHICS
-	graphics = Graphics(this);
-	opencl_c_code = device_defines(device_info)+graphics.device_defines(device_info)+get_opencl_c_code();
-#else // GRAPHICS
 	opencl_c_code = device_defines(device_info)+get_opencl_c_code();
-#endif // GRAPHICS
 	this->device = Device(device_info, opencl_c_code);
 	print_info("Allocating memory. This may take a few seconds.");
 	allocate(device); // lbm first
-#ifdef GRAPHICS
-	graphics.allocate(device); // graphics after lbm
-#endif // GRAPHICS
+}
+LBM_Domain::LBM_Domain(const Device_Info& device_info, const SimulationConfig& config, const uint Nx, const uint Ny, const uint Nz, const uint Dx, const uint Dy, const uint Dz, const int Ox, const int Oy, const int Oz) { // constructor with runtime config
+	this->Nx = Nx; this->Ny = Ny; this->Nz = Nz;
+	this->Dx = Dx; this->Dy = Dy; this->Dz = Dz;
+	this->Ox = Ox; this->Oy = Oy; this->Oz = Oz;
+	this->nu = config.nu;
+	this->fx = config.fx; this->fy = config.fy; this->fz = config.fz;
+	this->sigma = config.sigma;
+	this->alpha = config.alpha; this->beta = config.beta;
+	this->particles_N = config.particles_N;
+	this->particles_rho = config.particles_rho;
+	this->velocity_set = (uint)config.velocity_set;
+	this->dims = config.dimensions();
+	this->trans = config.transfers();
+	this->use_srt = (config.collision == SimulationConfig::CT_SRT);
+	this->fp_precision = (int)config.precision;
+	this->has_volume_force = config.volume_force;
+	this->has_force_field = config.force_field;
+	this->has_equilibrium_boundaries = config.equilibrium_boundaries;
+	this->has_moving_boundaries = config.moving_boundaries;
+	this->has_surface = config.surface;
+	this->has_temperature = config.temperature;
+	this->has_subgrid = config.subgrid;
+	this->has_particles = config.particles;
+	this->has_update_fields = config.update_fields();
+	string opencl_c_code;
+	opencl_c_code = device_defines(device_info)+get_opencl_c_code();
+	this->device = Device(device_info, opencl_c_code);
+	print_info("Allocating memory. This may take a few seconds.");
+	allocate(device); // lbm first
 }
 
 void LBM_Domain::allocate(Device& device) {
@@ -128,49 +172,49 @@ void LBM_Domain::allocate(Device& device) {
 	kernel_stream_collide = Kernel(device, N, "stream_collide", fi, rho, u, flags, t, fx, fy, fz);
 	kernel_update_fields = Kernel(device, N, "update_fields", fi, rho, u, flags, t, fx, fy, fz);
 
-#ifdef FORCE_FIELD
-	F = Memory<float>(device, N, 3u);
-	object_sum = Memory<float>(device, 1u, 4u); // x, y, z, cell count
-	kernel_stream_collide.add_parameters(F);
-	kernel_update_fields.add_parameters(F);
-	kernel_update_force_field = Kernel(device, N, "update_force_field", fi, flags, t, F);
-	kernel_reset_force_field = Kernel(device, N, "reset_force_field", F);
-	kernel_object_center_of_mass = Kernel(device, N, "object_center_of_mass", flags, (uchar)0u, object_sum);
-	kernel_object_force = Kernel(device, N, "object_force", F, flags, (uchar)0u, object_sum);
-	kernel_object_torque = Kernel(device, N, "object_torque", F, flags, (uchar)0u, 0.0f, 0.0f, 0.0f, object_sum);
-#endif // FORCE_FIELD
+	if(has_force_field) {
+		F = Memory<float>(device, N, 3u);
+		object_sum = Memory<float>(device, 1u, 4u);
+		kernel_stream_collide.add_parameters(F);
+		kernel_update_fields.add_parameters(F);
+		kernel_update_force_field = Kernel(device, N, "update_force_field", fi, flags, t, F);
+		kernel_reset_force_field = Kernel(device, N, "reset_force_field", F);
+		kernel_object_center_of_mass = Kernel(device, N, "object_center_of_mass", flags, (uchar)0u, object_sum);
+		kernel_object_force = Kernel(device, N, "object_force", F, flags, (uchar)0u, object_sum);
+		kernel_object_torque = Kernel(device, N, "object_torque", F, flags, (uchar)0u, 0.0f, 0.0f, 0.0f, object_sum);
+	}
 
-#ifdef MOVING_BOUNDARIES
-	kernel_update_moving_boundaries = Kernel(device, N, "update_moving_boundaries", u, flags);
-#endif // MOVING_BOUNDARIES
+	if(has_moving_boundaries) {
+		kernel_update_moving_boundaries = Kernel(device, N, "update_moving_boundaries", u, flags);
+	}
 
-#ifdef SURFACE
-	phi = Memory<float>(device, N);
-	mass = Memory<float>(device, N, 1u, false);
-	massex = Memory<float>(device, N, 1u, false);
-	kernel_initialize.add_parameters(mass, massex, phi);
-	kernel_stream_collide.add_parameters(mass);
-	kernel_surface_0 = Kernel(device, N, "surface_0", fi, rho, u, flags, mass, massex, phi, t, fx, fy, fz);
-	kernel_surface_1 = Kernel(device, N, "surface_1", flags);
-	kernel_surface_2 = Kernel(device, N, "surface_2", fi, rho, u, flags, t);
-	kernel_surface_3 = Kernel(device, N, "surface_3", rho, flags, mass, massex, phi);
-#endif // SURFACE
+	if(has_surface) {
+		phi = Memory<float>(device, N);
+		mass = Memory<float>(device, N, 1u, false);
+		massex = Memory<float>(device, N, 1u, false);
+		kernel_initialize.add_parameters(mass, massex, phi);
+		kernel_stream_collide.add_parameters(mass);
+		kernel_surface_0 = Kernel(device, N, "surface_0", fi, rho, u, flags, mass, massex, phi, t, fx, fy, fz);
+		kernel_surface_1 = Kernel(device, N, "surface_1", flags);
+		kernel_surface_2 = Kernel(device, N, "surface_2", fi, rho, u, flags, t);
+		kernel_surface_3 = Kernel(device, N, "surface_3", rho, flags, mass, massex, phi);
+	}
 
-#ifdef TEMPERATURE
-	gi = Memory<fpxx>(device, N, 7u, false);
-	T = Memory<float>(device, N, 1u, true, true, 1.0f);
-	kernel_initialize.add_parameters(gi, T);
-	kernel_stream_collide.add_parameters(gi, T);
-	kernel_update_fields.add_parameters(gi, T);
-#endif // TEMPERATURE
+	if(has_temperature) {
+		gi = Memory<fpxx>(device, N, 7u, false);
+		T = Memory<float>(device, N, 1u, true, true, 1.0f);
+		kernel_initialize.add_parameters(gi, T);
+		kernel_stream_collide.add_parameters(gi, T);
+		kernel_update_fields.add_parameters(gi, T);
+	}
 
-#ifdef PARTICLES
-	particles = Memory<float>(device, (ulong)particles_N, 3u);
-	kernel_integrate_particles = Kernel(device, (ulong)particles_N, "integrate_particles", particles, u, flags, 1.0f);
-#ifdef FORCE_FIELD
-	kernel_integrate_particles.add_parameters(F, fx, fy, fz);
-#endif // FORCE_FIELD
-#endif // PARTICLES
+	if(has_particles) {
+		particles = Memory<float>(device, (ulong)particles_N, 3u);
+		kernel_integrate_particles = Kernel(device, (ulong)particles_N, "integrate_particles", particles, u, flags, 1.0f);
+		if(has_force_field) {
+			kernel_integrate_particles.add_parameters(F, fx, fy, fz);
+		}
+	}
 
 	if(get_D()>1u) allocate_transfer(device);
 }
@@ -268,10 +312,6 @@ void LBM_Domain::finish_queue() {
 	device.finish_queue();
 }
 
-uint LBM_Domain::get_velocity_set() const {
-	return velocity_set;
-}
-
 void LBM_Domain::voxelize_mesh_on_device(const Mesh* mesh, const uchar flag, const float3& rotation_center, const float3& linear_velocity, const float3& rotational_velocity) { // voxelize triangle mesh
 	Memory<float3> p0(device, mesh->triangle_number, 1u, mesh->p0);
 	Memory<float3> p1(device, mesh->triangle_number, 1u, mesh->p1);
@@ -331,316 +371,128 @@ void LBM_Domain::enqueue_unvoxelize_mesh_on_device(const Mesh* mesh, const uchar
 	kernel_unvoxelize_mesh.run();
 }
 
-string LBM_Domain::device_defines(const Device_Info& device_info) const { return
-	"\n	#define def_Nx "+to_string(Nx)+"u"
-	"\n	#define def_Ny "+to_string(Ny)+"u"
-	"\n	#define def_Nz "+to_string(Nz)+"u"
-	"\n	#define def_N "+to_string(get_N())+"ul"
-	"\n	#define uxx "+(get_N()<=(ulong)max_uint ? "uint" : "ulong")+"" // switchable data type for index calculation (32-bit uint / 64-bit ulong)
+string LBM_Domain::device_defines(const Device_Info& device_info) const {
+	string s;
+	s += "\n\t#define def_Nx "+to_string(Nx)+"u";
+	s += "\n\t#define def_Ny "+to_string(Ny)+"u";
+	s += "\n\t#define def_Nz "+to_string(Nz)+"u";
+	s += "\n\t#define def_N "+to_string(get_N())+"ul";
+	s += "\n\t#define uxx "+string(get_N()<=(ulong)max_uint ? "uint" : "ulong")+""; // switchable data type for index calculation (32-bit uint / 64-bit ulong)
 
-	"\n	#define def_GNx "+to_string((Nx-2u*(uint)(Dx>1u))*Dx)+"u" // global LBM grid resolution of all domains together
-	"\n	#define def_GNy "+to_string((Ny-2u*(uint)(Dy>1u))*Dy)+"u"
-	"\n	#define def_GNz "+to_string((Nz-2u*(uint)(Dz>1u))*Dz)+"u"
+	s += "\n\t#define def_GNx "+to_string((Nx-2u*(uint)(Dx>1u))*Dx)+"u"; // global LBM grid resolution of all domains together
+	s += "\n\t#define def_GNy "+to_string((Ny-2u*(uint)(Dy>1u))*Dy)+"u";
+	s += "\n\t#define def_GNz "+to_string((Nz-2u*(uint)(Dz>1u))*Dz)+"u";
 
-	"\n	#define def_Dx "+to_string(Dx)+"u"
-	"\n	#define def_Dy "+to_string(Dy)+"u"
-	"\n	#define def_Dz "+to_string(Dz)+"u"
+	s += "\n\t#define def_Dx "+to_string(Dx)+"u";
+	s += "\n\t#define def_Dy "+to_string(Dy)+"u";
+	s += "\n\t#define def_Dz "+to_string(Dz)+"u";
 
-	"\n	#define def_Ox "+to_string(Ox)+"" // offsets are signed integer!
-	"\n	#define def_Oy "+to_string(Oy)+""
-	"\n	#define def_Oz "+to_string(Oz)+""
+	s += "\n\t#define def_Ox "+to_string(Ox)+""; // offsets are signed integer!
+	s += "\n\t#define def_Oy "+to_string(Oy)+"";
+	s += "\n\t#define def_Oz "+to_string(Oz)+"";
 
-	"\n	#define def_Ax "+to_string(Ny*Nz)+"u"
-	"\n	#define def_Ay "+to_string(Nz*Nx)+"u"
-	"\n	#define def_Az "+to_string(Nx*Ny)+"u"
+	s += "\n\t#define def_Ax "+to_string(Ny*Nz)+"u";
+	s += "\n\t#define def_Ay "+to_string(Nz*Nx)+"u";
+	s += "\n\t#define def_Az "+to_string(Nx*Ny)+"u";
 
-	"\n	#define def_domain_offset_x "+to_string(0.5f*(float)((int)Nx+2*Ox+(int)Dx*(2*(int)(Dx>1u)-(int)Nx)))+"f"
-	"\n	#define def_domain_offset_y "+to_string(0.5f*(float)((int)Ny+2*Oy+(int)Dy*(2*(int)(Dy>1u)-(int)Ny)))+"f"
-	"\n	#define def_domain_offset_z "+to_string(0.5f*(float)((int)Nz+2*Oz+(int)Dz*(2*(int)(Dz>1u)-(int)Nz)))+"f"
+	s += "\n\t#define def_domain_offset_x "+to_string(0.5f*(float)((int)Nx+2*Ox+(int)Dx*(2*(int)(Dx>1u)-(int)Nx)))+"f";
+	s += "\n\t#define def_domain_offset_y "+to_string(0.5f*(float)((int)Ny+2*Oy+(int)Dy*(2*(int)(Dy>1u)-(int)Ny)))+"f";
+	s += "\n\t#define def_domain_offset_z "+to_string(0.5f*(float)((int)Nz+2*Oz+(int)Dz*(2*(int)(Dz>1u)-(int)Nz)))+"f";
 
-	"\n	#define D"+to_string(dimensions)+"Q"+to_string(velocity_set)+"" // D2Q9/D3Q15/D3Q19/D3Q27
-	"\n	#define def_velocity_set "+to_string(velocity_set)+"u" // LBM velocity set (D2Q9/D3Q15/D3Q19/D3Q27)
-	"\n	#define def_dimensions "+to_string(dimensions)+"u" // number spatial dimensions (2D or 3D)
-	"\n	#define def_transfers "+to_string(transfers)+"u" // number of DDFs that are transferred between multiple domains
+	s += "\n\t#define D"+to_string(dims)+"Q"+to_string(velocity_set)+""; // D2Q9/D3Q15/D3Q19/D3Q27
+	s += "\n\t#define def_velocity_set "+to_string(velocity_set)+"u"; // LBM velocity set (D2Q9/D3Q15/D3Q19/D3Q27)
+	s += "\n\t#define def_dimensions "+to_string(dims)+"u"; // number spatial dimensions (2D or 3D)
+	s += "\n\t#define def_transfers "+to_string(trans)+"u"; // number of DDFs that are transferred between multiple domains
 
-	"\n	#define def_c 0.57735027f" // lattice speed of sound c = 1/sqrt(3)*dt
-	"\n	#define def_w " +to_string(1.0f/get_tau())+"f" // relaxation rate w = dt/tau = dt/(nu/c^2+dt/2) = 1/(3*nu+1/2)
-#if defined(D2Q9)
-	"\n	#define def_w0 (1.0f/2.25f)" // center (0)
-	"\n	#define def_ws (1.0f/9.0f)" // straight (1-4)
-	"\n	#define def_we (1.0f/36.0f)" // edge (5-8)
-#elif defined(D3Q15)
-	"\n	#define def_w0 (1.0f/4.5f)" // center (0)
-	"\n	#define def_ws (1.0f/9.0f)" // straight (1-6)
-	"\n	#define def_wc (1.0f/72.0f)" // corner (7-14)
-#elif defined(D3Q19)
-	"\n	#define def_w0 (1.0f/3.0f)" // center (0)
-	"\n	#define def_ws (1.0f/18.0f)" // straight (1-6)
-	"\n	#define def_we (1.0f/36.0f)" // edge (7-18)
-#elif defined(D3Q27)
-	"\n	#define def_w0 (1.0f/3.375f)" // center (0)
-	"\n	#define def_ws (1.0f/13.5f)" // straight (1-6)
-	"\n	#define def_we (1.0f/54.0f)" // edge (7-18)
-	"\n	#define def_wc (1.0f/216.0f)" // corner (19-26)
-#endif // D3Q27
+	s += "\n\t#define def_c 0.57735027f"; // lattice speed of sound c = 1/sqrt(3)*dt
+	s += "\n\t#define def_w " +to_string(1.0f/get_tau())+"f"; // relaxation rate w = dt/tau = dt/(nu/c^2+dt/2) = 1/(3*nu+1/2)
 
-#if defined(SRT)
-	"\n	#define SRT"
-#elif defined(TRT)
-	"\n	#define TRT"
-#endif // TRT
-
-	"\n	#define TYPE_S 0x01" // 0b00000001 // (stationary or moving) solid boundary
-	"\n	#define TYPE_E 0x02" // 0b00000010 // equilibrium boundary (inflow/outflow)
-	"\n	#define TYPE_T 0x04" // 0b00000100 // temperature boundary
-	"\n	#define TYPE_F 0x08" // 0b00001000 // fluid
-	"\n	#define TYPE_I 0x10" // 0b00010000 // interface
-	"\n	#define TYPE_G 0x20" // 0b00100000 // gas
-	"\n	#define TYPE_X 0x40" // 0b01000000 // reserved type X
-	"\n	#define TYPE_Y 0x80" // 0b10000000 // reserved type Y
-
-	"\n	#define TYPE_MS 0x03" // 0b00000011 // cell next to moving solid boundary
-	"\n	#define TYPE_BO 0x03" // 0b00000011 // any flag bit used for boundaries (temperature excluded)
-	"\n	#define TYPE_IF 0x18" // 0b00011000 // change from interface to fluid
-	"\n	#define TYPE_IG 0x30" // 0b00110000 // change from interface to gas
-	"\n	#define TYPE_GI 0x38" // 0b00111000 // change from gas to interface
-	"\n	#define TYPE_SU 0x38" // 0b00111000 // any flag bit used for SURFACE
-	"\n	#define TYPE_XY 0xC0" // 0b11000000 // any flag bit used for X or Y markers
-
-#if defined(FP16S)
-	"\n	#define fpxx half" // switchable data type (scaled IEEE-754 16-bit floating-point format: 1-5-10, exp-30, +-1.99902344, +-1.86446416E-9, +-1.81898936E-12, 3.311 digits)
-	"\n	#define fpxx_copy ushort" // switchable data type for direct copying (scaled IEEE-754 16-bit floating-point format: 1-5-10, exp-30, +-1.99902344, +-1.86446416E-9, +-1.81898936E-12, 3.311 digits)
-	"\n	#define load(p,o) (vload_half(o,p)*3.0517578E-5f)" // special function for loading half
-	"\n	#define store(p,o,x) vstore_half_rte((x)*32768.0f,o,p)" // special function for storing half
-#elif defined(FP16C)
-	"\n	#define fpxx ushort" // switchable data type (custom 16-bit floating-point format: 1-4-11, exp-15, +-1.99951168, +-6.10351562E-5, +-2.98023224E-8, 3.612 digits), 12.5% slower than IEEE-754 16-bit
-	"\n	#define fpxx_copy ushort" // switchable data type for direct copying (custom 16-bit floating-point format: 1-4-11, exp-15, +-1.99951168, +-6.10351562E-5, +-2.98023224E-8, 3.612 digits), 12.5% slower than IEEE-754 16-bit
-	"\n	#define load(p,o) half_to_float_custom((p)[o])" // special function for loading half
-	"\n	#define store(p,o,x) (p)[o]=float_to_half_custom(x)" // special function for storing half
-#else // FP32
-	"\n	#define fpxx float" // switchable data type (regular 32-bit float)
-	"\n	#define fpxx_copy float" // switchable data type for direct copying (regular 32-bit float)
-	"\n	#define load(p,o) (p)[o]" // regular float read
-	"\n	#define store(p,o,x) (p)[o]=(x)" // regular float write
-#endif // FP32
-
-#ifdef UPDATE_FIELDS
-	"\n	#define UPDATE_FIELDS"
-#endif // UPDATE_FIELDS
-
-#ifdef VOLUME_FORCE
-	"\n	#define VOLUME_FORCE"
-#endif // VOLUME_FORCE
-
-#ifdef MOVING_BOUNDARIES
-	"\n	#define MOVING_BOUNDARIES"
-#endif // MOVING_BOUNDARIES
-
-#ifdef EQUILIBRIUM_BOUNDARIES
-	"\n	#define EQUILIBRIUM_BOUNDARIES"
-#endif // EQUILIBRIUM_BOUNDARIES
-
-#ifdef FORCE_FIELD
-	"\n	#define FORCE_FIELD"
-#endif // FORCE_FIELD
-
-#ifdef SURFACE
-	"\n	#define SURFACE"
-	"\n	#define def_6_sigma "+to_string(6.0f*sigma)+"f" // rho_laplace = 2*o*K, rho = 1-rho_laplace/c^2 = 1-(6*o)*K
-#endif // SURFACE
-
-#ifdef TEMPERATURE
-	"\n	#define TEMPERATURE"
-	"\n	#define def_w_T "+to_string(1.0f/(2.0f*alpha+0.5f))+"f" // wT = dt/tauT = 1/(2*alpha+1/2), alpha = thermal diffusion coefficient
-	"\n	#define def_beta "+to_string(beta)+"f" // thermal expansion coefficient
-	"\n	#define def_T_avg "+to_string(T_avg)+"f" // average temperature
-#endif // TEMPERATURE
-
-#ifdef SUBGRID
-	"\n	#define SUBGRID"
-#endif // SUBGRID
-
-#ifdef PARTICLES
-	"\n	#define PARTICLES"
-	"\n	#define def_particles_N "+to_string(particles_N)+"ul"
-	"\n	#define def_particles_rho "+to_string(particles_rho)+"f"
-#endif // PARTICLES
-;}
-
-#ifdef GRAPHICS
-void LBM_Domain::Graphics::allocate(Device& device) {
-	bitmap = Memory<int>(device, camera.width*camera.height);
-	zbuffer = Memory<int>(device, camera.width*camera.height, 1u, lbm->get_D()>1u); // if there are multiple domains, allocate zbuffer also on host side
-	camera_parameters = Memory<float>(device, 15u);
-	kernel_clear = Kernel(device, bitmap.length(), "graphics_clear", bitmap, zbuffer);
-	kernel_graphics_flags = Kernel(device, lbm->get_N(), "graphics_flags", camera_parameters, bitmap, zbuffer, lbm->flags);
-	{
-#ifndef FORCE_FIELD
-		const uint cache_required = (cb(GRAPHICS_LSF+1u)* 1u+1023u)/1024u; // in KB
-#else // FORCE_FIELD
-		const uint cache_required = (cb(GRAPHICS_LSF+1u)*13u+1023u)/1024u; // in KB
-#endif // FORCE_FIELD
-		const bool enable_ls = GRAPHICS_LSF>0u&&device.info.max_workgroup_size>=cb(GRAPHICS_LSF)&&device.info.local_cache>=cache_required;
-		if(GRAPHICS_LSF>0u&&!enable_ls) print_warning(device.info.name+" does not support local memory optimization with GRAPHICS_LSF = "+to_string(GRAPHICS_LSF)+" (max supported workgroup size: "+to_string(device.info.max_workgroup_size)+" (required: "+to_string(cb(GRAPHICS_LSF))+"), cache: "+to_string(device.info.local_cache)+"KB (required: "+to_string(cache_required)+"KB)). Disabling local memory optimization.");
-		const ulong N = enable_ls ? (ulong)((lbm->get_Nx()+GRAPHICS_LSF-2u)/GRAPHICS_LSF)*(ulong)((lbm->get_Ny()+GRAPHICS_LSF-2u)/GRAPHICS_LSF)*(ulong)((lbm->get_Nz()+GRAPHICS_LSF-2u)/GRAPHICS_LSF)*(ulong)cb(GRAPHICS_LSF) : (ulong)(lbm->get_Nx()-1u)*(ulong)(lbm->get_Ny()-1u)*(ulong)(lbm->get_Nz()-1u);
-		const uint workgroup_size = enable_ls ? cb(GRAPHICS_LSF) : WORKGROUP_SIZE;
-		kernel_graphics_flags_mc = Kernel(device, N, workgroup_size, "graphics_flags_mc", camera_parameters, bitmap, zbuffer, lbm->flags);
-	}
-	kernel_graphics_field = Kernel(device, lbm->get_D()==1u ? camera.width*camera.height : lbm->get_N(), lbm->get_D()==1u ? "graphics_field_rt" : "graphics_field", camera_parameters, bitmap, zbuffer, 0, lbm->rho, lbm->u, lbm->flags); // raytraced field visualization only works for single-GPU
-	kernel_graphics_field_slice = Kernel(device, lbm->get_N(), "graphics_field_slice", camera_parameters, bitmap, zbuffer, 0, 0, 0, 0, 0, lbm->rho, lbm->u, lbm->flags);
-#ifndef D2Q9
-	kernel_graphics_streamline = Kernel(device, (lbm->get_Nx()/GRAPHICS_STREAMLINE_SPARSE)*(lbm->get_Ny()/GRAPHICS_STREAMLINE_SPARSE)*(lbm->get_Nz()/GRAPHICS_STREAMLINE_SPARSE), "graphics_streamline", camera_parameters, bitmap, zbuffer, 0, 0, 0, 0, 0, lbm->rho, lbm->u, lbm->flags); // 3D
-#else // D2Q9
-	kernel_graphics_streamline = Kernel(device, (lbm->get_Nx()/GRAPHICS_STREAMLINE_SPARSE)*(lbm->get_Ny()/GRAPHICS_STREAMLINE_SPARSE), "graphics_streamline", camera_parameters, bitmap, zbuffer, 0, 0, 0, 0, 0, lbm->rho, lbm->u, lbm->flags); // 2D
-#endif // D2Q9
-	{
-		const uint cache_required = (cb(GRAPHICS_LSQ+3u)*12u+1023u)/1024u; // in KB
-		const bool enable_ls = GRAPHICS_LSQ>0u&&device.info.max_workgroup_size>=cb(GRAPHICS_LSQ)&&device.info.local_cache>=cache_required;
-		if(GRAPHICS_LSQ>0u&&!enable_ls) print_warning(device.info.name+" does not support local memory optimization with GRAPHICS_LSQ = "+to_string(GRAPHICS_LSQ)+" (max supported workgroup size: "+to_string(device.info.max_workgroup_size)+" (required: "+to_string(cb(GRAPHICS_LSQ))+"), cache: "+to_string(device.info.local_cache)+"KB (required: "+to_string(cache_required)+"KB)). Disabling local memory optimization.");
-		const ulong N = enable_ls ? (ulong)((lbm->get_Nx()+GRAPHICS_LSQ-2u)/GRAPHICS_LSQ)*(ulong)((lbm->get_Ny()+GRAPHICS_LSQ-2u)/GRAPHICS_LSQ)*(ulong)((lbm->get_Nz()+GRAPHICS_LSQ-2u)/GRAPHICS_LSQ)*(ulong)cb(GRAPHICS_LSQ) : (ulong)(lbm->get_Nx()-1u)*(ulong)(lbm->get_Ny()-1u)*(ulong)(lbm->get_Nz()-1u);
-		const uint workgroup_size = enable_ls ? cb(GRAPHICS_LSQ) : WORKGROUP_SIZE;
-		kernel_graphics_q = Kernel(device, N, workgroup_size, "graphics_q", camera_parameters, bitmap, zbuffer, 0, lbm->rho, lbm->u);
+	// velocity set lattice weights
+	if(velocity_set==9u) {
+		s += "\n\t#define def_w0 (1.0f/2.25f)"; // center (0)
+		s += "\n\t#define def_ws (1.0f/9.0f)"; // straight (1-4)
+		s += "\n\t#define def_we (1.0f/36.0f)"; // edge (5-8)
+	} else if(velocity_set==15u) {
+		s += "\n\t#define def_w0 (1.0f/4.5f)"; // center (0)
+		s += "\n\t#define def_ws (1.0f/9.0f)"; // straight (1-6)
+		s += "\n\t#define def_wc (1.0f/72.0f)"; // corner (7-14)
+	} else if(velocity_set==19u) {
+		s += "\n\t#define def_w0 (1.0f/3.0f)"; // center (0)
+		s += "\n\t#define def_ws (1.0f/18.0f)"; // straight (1-6)
+		s += "\n\t#define def_we (1.0f/36.0f)"; // edge (7-18)
+	} else if(velocity_set==27u) {
+		s += "\n\t#define def_w0 (1.0f/3.375f)"; // center (0)
+		s += "\n\t#define def_ws (1.0f/13.5f)"; // straight (1-6)
+		s += "\n\t#define def_we (1.0f/54.0f)"; // edge (7-18)
+		s += "\n\t#define def_wc (1.0f/216.0f)"; // corner (19-26)
 	}
 
-#ifdef FORCE_FIELD
-	kernel_graphics_flags.add_parameters(lbm->F);
-	kernel_graphics_flags_mc.add_parameters(lbm->F);
-#endif // FORCE_FIELD
+	// collision operator
+	if(use_srt) s += "\n\t#define SRT";
+	else        s += "\n\t#define TRT";
 
-#ifdef SURFACE
-	skybox = Memory<int>(device, skybox_image->width()*skybox_image->height(), 1u, skybox_image->data());
-	kernel_graphics_rasterize_phi = Kernel(device, lbm->get_N(), "graphics_rasterize_phi", camera_parameters, bitmap, zbuffer, lbm->phi);
-	kernel_graphics_raytrace_phi = Kernel(device, bitmap.length(), "graphics_raytrace_phi", camera_parameters, bitmap, skybox, lbm->phi, lbm->flags);
-	kernel_graphics_q.add_parameters(lbm->flags);
-#endif // SURFACE
+	s += "\n\t#define TYPE_S 0x01"; // 0b00000001 // (stationary or moving) solid boundary
+	s += "\n\t#define TYPE_E 0x02"; // 0b00000010 // equilibrium boundary (inflow/outflow)
+	s += "\n\t#define TYPE_T 0x04"; // 0b00000100 // temperature boundary
+	s += "\n\t#define TYPE_F 0x08"; // 0b00001000 // fluid
+	s += "\n\t#define TYPE_I 0x10"; // 0b00010000 // interface
+	s += "\n\t#define TYPE_G 0x20"; // 0b00100000 // gas
+	s += "\n\t#define TYPE_X 0x40"; // 0b01000000 // reserved type X
+	s += "\n\t#define TYPE_Y 0x80"; // 0b10000000 // reserved type Y
 
-#ifdef TEMPERATURE
-	kernel_graphics_field.add_parameters(lbm->T);
-	kernel_graphics_field_slice.add_parameters(lbm->T);
-	kernel_graphics_streamline.add_parameters(lbm->T);
-	kernel_graphics_q.add_parameters(lbm->T);
-#endif // TEMPERATURE
+	s += "\n\t#define TYPE_MS 0x03"; // 0b00000011 // cell next to moving solid boundary
+	s += "\n\t#define TYPE_BO 0x03"; // 0b00000011 // any flag bit used for boundaries (temperature excluded)
+	s += "\n\t#define TYPE_IF 0x18"; // 0b00011000 // change from interface to fluid
+	s += "\n\t#define TYPE_IG 0x30"; // 0b00110000 // change from interface to gas
+	s += "\n\t#define TYPE_GI 0x38"; // 0b00111000 // change from gas to interface
+	s += "\n\t#define TYPE_SU 0x38"; // 0b00111000 // any flag bit used for SURFACE
+	s += "\n\t#define TYPE_XY 0xC0"; // 0b11000000 // any flag bit used for X or Y markers
 
-#ifdef PARTICLES
-	kernel_graphics_particles = Kernel(device, lbm->particles.length(), "graphics_particles", camera_parameters, bitmap, zbuffer, lbm->particles);
-#endif // PARTICLES
-}
-
-bool LBM_Domain::Graphics::update_camera() {
-	camera.update_matrix();
-	bool change = false;
-	for(uint i=0u; i<15u; i++) {
-		const float data = camera.data(i);
-		change |= (camera_parameters[i]!=data);
-		camera_parameters[i] = data;
+	// FP precision
+	if(fp_precision==1) {
+		s += "\n\t#define fpxx half"; // switchable data type (scaled IEEE-754 16-bit floating-point format: 1-5-10, exp-30, +-1.99902344, +-1.86446416E-9, +-1.81898936E-12, 3.311 digits)
+		s += "\n\t#define fpxx_copy ushort"; // switchable data type for direct copying (scaled IEEE-754 16-bit floating-point format: 1-5-10, exp-30, +-1.99902344, +-1.86446416E-9, +-1.81898936E-12, 3.311 digits)
+		s += "\n\t#define load(p,o) (vload_half(o,p)*3.0517578E-5f)"; // special function for loading half
+		s += "\n\t#define store(p,o,x) vstore_half_rte((x)*32768.0f,o,p)"; // special function for storing half
+	} else if(fp_precision==2) {
+		s += "\n\t#define fpxx ushort"; // switchable data type (custom 16-bit floating-point format: 1-4-11, exp-15, +-1.99951168, +-6.10351562E-5, +-2.98023224E-8, 3.612 digits), 12.5% slower than IEEE-754 16-bit
+		s += "\n\t#define fpxx_copy ushort"; // switchable data type for direct copying (custom 16-bit floating-point format: 1-4-11, exp-15, +-1.99951168, +-6.10351562E-5, +-2.98023224E-8, 3.612 digits), 12.5% slower than IEEE-754 16-bit
+		s += "\n\t#define load(p,o) half_to_float_custom((p)[o])"; // special function for loading half
+		s += "\n\t#define store(p,o,x) (p)[o]=float_to_half_custom(x)"; // special function for storing half
+	} else { // FP32
+		s += "\n\t#define fpxx float"; // switchable data type (regular 32-bit float)
+		s += "\n\t#define fpxx_copy float"; // switchable data type for direct copying (regular 32-bit float)
+		s += "\n\t#define load(p,o) (p)[o]"; // regular float read
+		s += "\n\t#define store(p,o,x) (p)[o]=(x)"; // regular float write
 	}
-	return change; // return false if camera parameters remain unchanged
-}
-bool LBM_Domain::Graphics::enqueue_draw_frame(const int visualization_modes, const int field_mode, const int slice_mode, const int slice_x, const int slice_y, const int slice_z, const bool visualization_change) {
-	const bool camera_update = update_camera();
-#if defined(INTERACTIVE_GRAPHICS)||defined(INTERACTIVE_GRAPHICS_ASCII)
-	if(!visualization_change&&!camera_update&&lbm->get_t()==t_last_rendered_frame) return false; // don't render a new frame if the scene hasn't changed since last frame
-#endif // INTERACTIVE_GRAPHICS||INTERACTIVE_GRAPHICS_ASCII
-	t_last_rendered_frame = lbm->get_t();
-	if(camera_update) camera_parameters.enqueue_write_to_device(); // camera_parameters PCIe transfer and kernel_clear execution can happen simulataneously
-	kernel_clear.enqueue_run();
-	const int sx=slice_x-lbm->Ox, sy=slice_y-lbm->Oy, sz=slice_z-lbm->Oz; // subtract domain offsets
-#ifdef SURFACE
-	if((visualization_modes&VIS_PHI_RAYTRACE)&&lbm->get_D()==1u) kernel_graphics_raytrace_phi.enqueue_run(); // disable raytracing for multi-GPU (domain decomposition rendering doesn't work for raytracing)
-	if(visualization_modes&VIS_PHI_RASTERIZE) kernel_graphics_rasterize_phi.enqueue_run();
-#endif // SURFACE
-	if(visualization_modes&VIS_FLAG_LATTICE) kernel_graphics_flags.enqueue_run();
-	if(visualization_modes&VIS_FLAG_SURFACE) kernel_graphics_flags_mc.enqueue_run();
-	if(visualization_modes&VIS_STREAMLINES) kernel_graphics_streamline.set_parameters(3u, field_mode, slice_mode, sx, sy, sz).enqueue_run();
-	if(visualization_modes&VIS_Q_CRITERION) kernel_graphics_q.set_parameters(3u, field_mode).enqueue_run();
-#ifdef PARTICLES
-	if(visualization_modes&VIS_PARTICLES) kernel_graphics_particles.enqueue_run();
-#endif // PARTICLES
-	if(visualization_modes&VIS_FIELD) {
-		switch(slice_mode) { // 0 (no slice), 1 (x), 2 (y), 3 (z), 4 (xz), 5 (xyz), 6 (yz), 7 (xy)
-			case 0: // no slice
-				kernel_graphics_field.set_parameters(3u, field_mode).enqueue_run();
-				break;
-			case 1: case 2: case 3: // x/y/z
-				kernel_graphics_field_slice.set_ranges(lbm->get_area((uint)clamp(slice_mode-1, 0, 2))).set_parameters(3u, field_mode, slice_mode, sx, sy, sz).enqueue_run();
-				break;
-			case 4: // xz
-				kernel_graphics_field_slice.set_ranges(lbm->get_area(0u)).set_parameters(3u, field_mode, 0u+1u, sx, sy, sz).enqueue_run();
-				kernel_graphics_field_slice.set_ranges(lbm->get_area(2u)).set_parameters(3u, field_mode, 2u+1u, sx, sy, sz).enqueue_run();
-				break;
-			case 5: // xyz
-				kernel_graphics_field_slice.set_ranges(lbm->get_area(0u)).set_parameters(3u, field_mode, 0u+1u, sx, sy, sz).enqueue_run();
-				kernel_graphics_field_slice.set_ranges(lbm->get_area(1u)).set_parameters(3u, field_mode, 1u+1u, sx, sy, sz).enqueue_run();
-				kernel_graphics_field_slice.set_ranges(lbm->get_area(2u)).set_parameters(3u, field_mode, 2u+1u, sx, sy, sz).enqueue_run();
-				break;
-			case 6: // yz
-				kernel_graphics_field_slice.set_ranges(lbm->get_area(1u)).set_parameters(3u, field_mode, 1u+1u, sx, sy, sz).enqueue_run();
-				kernel_graphics_field_slice.set_ranges(lbm->get_area(2u)).set_parameters(3u, field_mode, 2u+1u, sx, sy, sz).enqueue_run();
-				break;
-			case 7: // xy
-				kernel_graphics_field_slice.set_ranges(lbm->get_area(0u)).set_parameters(3u, field_mode, 0u+1u, sx, sy, sz).enqueue_run();
-				kernel_graphics_field_slice.set_ranges(lbm->get_area(1u)).set_parameters(3u, field_mode, 1u+1u, sx, sy, sz).enqueue_run();
-				break;
-		}
+
+	// extension flags
+	if(has_update_fields)           s += "\n\t#define UPDATE_FIELDS";
+	if(has_volume_force)            s += "\n\t#define VOLUME_FORCE";
+	if(has_moving_boundaries)       s += "\n\t#define MOVING_BOUNDARIES";
+	if(has_equilibrium_boundaries)  s += "\n\t#define EQUILIBRIUM_BOUNDARIES";
+	if(has_force_field)             s += "\n\t#define FORCE_FIELD";
+	if(has_surface) {
+		s += "\n\t#define SURFACE";
+		s += "\n\t#define def_6_sigma "+to_string(6.0f*sigma)+"f"; // rho_laplace = 2*o*K, rho = 1-rho_laplace/c^2 = 1-(6*o)*K
 	}
-	bitmap.enqueue_read_from_device();
-	if(lbm->get_D()>1u) zbuffer.enqueue_read_from_device();
-	return true; // new frame has been rendered
+	if(has_temperature) {
+		s += "\n\t#define TEMPERATURE";
+		s += "\n\t#define def_w_T "+to_string(1.0f/(2.0f*alpha+0.5f))+"f"; // wT = dt/tauT = 1/(2*alpha+1/2), alpha = thermal diffusion coefficient
+		s += "\n\t#define def_beta "+to_string(beta)+"f"; // thermal expansion coefficient
+		s += "\n\t#define def_T_avg "+to_string(T_avg)+"f"; // average temperature
+	}
+	if(has_subgrid)                 s += "\n\t#define SUBGRID";
+	if(has_particles) {
+		s += "\n\t#define PARTICLES";
+		s += "\n\t#define def_particles_N "+to_string(particles_N)+"ul";
+		s += "\n\t#define def_particles_rho "+to_string(particles_rho)+"f";
+	}
+	return s;
 }
-int* LBM_Domain::Graphics::get_bitmap() { // returns pointer to zbuffer
-	return bitmap.data();
-}
-int* LBM_Domain::Graphics::get_zbuffer() { // returns pointer to zbuffer
-	return zbuffer.data();
-}
 
-string LBM_Domain::Graphics::device_defines(const Device_Info& device_info) const { return
-	"\n	#define GRAPHICS"
-	"\n	#define def_background_color " +to_string(GRAPHICS_BACKGROUND_COLOR)+""
-	"\n	#define def_screen_width "     +to_string(camera.width)+"u"
-	"\n	#define def_screen_height "    +to_string(camera.height)+"u"
-	"\n	#define def_scale_u "          +to_string(1.0f/(0.57735027f*(GRAPHICS_U_MAX)))+"f"
-	"\n	#define def_scale_rho "        +to_string(0.5f/(GRAPHICS_RHO_DELTA))+"f"
-	"\n	#define def_scale_T "          +to_string(0.5f/(GRAPHICS_T_DELTA))+"f"
-	"\n	#define def_scale_F "          +to_string(0.5f/(GRAPHICS_F_MAX))+"f"
-	"\n	#define def_scale_Q_min "      +to_string(GRAPHICS_Q_CRITERION)+"f"
-	"\n	#define def_streamline_sparse "+to_string(GRAPHICS_STREAMLINE_SPARSE)+"u"
-	"\n	#define def_streamline_length "+to_string(GRAPHICS_STREAMLINE_LENGTH)+"u"
-	"\n	#define def_n "                +to_string(1.333f)+"f" // refractive index of water for raytracing graphics
-	"\n	#define def_attenuation "      +to_string(ln(clamp(GRAPHICS_RAYTRACING_TRANSMITTANCE, 1E-9f, 1.0f))/(float)max(max(lbm->get_Nx(), lbm->get_Ny()), lbm->get_Nz()))+"f" // (negative) attenuation parameter for raytracing graphics
-	"\n	#define def_absorption_color " +to_string(GRAPHICS_RAYTRACING_COLOR)+"" // absorption color of fluid for raytracing graphics
 
-	"\n	#define COLOR_S (127<<16|127<<8|127)" // (stationary or moving) solid boundary
-	"\n	#define COLOR_E (  0<<16|255<<8|  0)" // equilibrium boundary (inflow/outflow)
-	"\n	#define COLOR_M (255<<16|  0<<8|255)" // cells next to moving solid boundary
-	"\n	#define COLOR_T (255<<16|  0<<8|  0)" // temperature boundary
-	"\n	#define COLOR_F (  0<<16|  0<<8|255)" // fluid
-	"\n	#define COLOR_I (  0<<16|255<<8|255)" // interface
-	"\n	#define COLOR_0 (127<<16|127<<8|127)" // regular cell or gas
-	"\n	#define COLOR_X (255<<16|127<<8|  0)" // reserved type X
-	"\n	#define COLOR_Y (255<<16|255<<8|  0)" // reserved type Y
-	"\n	#define COLOR_P (255<<16|255<<8|191)" // particles
 
-#ifdef GRAPHICS_TRANSPARENCY
-	"\n	#define GRAPHICS_TRANSPARENCY "+to_string(GRAPHICS_TRANSPARENCY)+"f"
-#endif // GRAPHICS_TRANSPARENCY
-
-#ifndef SURFACE
-	"\n	#define def_skybox_width 1u"
-	"\n	#define def_skybox_height 1u"
-#else // SURFACE
-	"\n	#define def_skybox_width " +to_string(skybox_image->width() )+"u"
-	"\n	#define def_skybox_height "+to_string(skybox_image->height())+"u"
-#endif // SURFACE
-
-#ifndef FORCE_FIELD
-	"\n	#define LSF "+to_string((GRAPHICS_LSF>0u&&device_info.max_workgroup_size>=cb(GRAPHICS_LSF)&&device_info.local_cache>=(cb(GRAPHICS_LSF+1u)* 1u+1023u)/1024u) ? GRAPHICS_LSF : 0u)+"u" // local box size for graphics_flags_mc() kernel (default: 4)
-#else // FORCE_FIELD
-	"\n	#define LSF "+to_string((GRAPHICS_LSF>0u&&device_info.max_workgroup_size>=cb(GRAPHICS_LSF)&&device_info.local_cache>=(cb(GRAPHICS_LSF+1u)*13u+1023u)/1024u) ? GRAPHICS_LSF : 0u)+"u" // local box size for graphics_flags_mc() kernel (default: 4)
-#endif // FORCE_FIELD
-	"\n	#define LSQ "+to_string((GRAPHICS_LSQ>0u&&device_info.max_workgroup_size>=cb(GRAPHICS_LSQ)&&device_info.local_cache>=(cb(GRAPHICS_LSQ+3u)*12u+1023u)/1024u) ? GRAPHICS_LSQ : 0u)+"u" // local box size for graphics_q() kernel (default: 8)
-;}
-#endif // GRAPHICS
 
 
 
@@ -759,20 +611,64 @@ LBM::LBM(const uint Nx, const uint Ny, const uint Nz, const uint Dx, const uint 
 		particles = &(lbm_domain[0]->particles);
 #endif // PARTICLES
 	}
-#ifdef GRAPHICS
-	graphics = Graphics(this);
-#endif // GRAPHICS
+}
+LBM::LBM(const SimulationConfig& config) { // runtime config constructor
+	const uint NDx=(config.Nx/config.Dx)*config.Dx, NDy=(config.Ny/config.Dy)*config.Dy, NDz=(config.Nz/config.Dz)*config.Dz; // make resolution equally divisible by domains
+	if(NDx!=config.Nx||NDy!=config.Ny||NDz!=config.Nz) print_warning("LBM grid ("+to_string(config.Nx)+"x"+to_string(config.Ny)+"x"+to_string(config.Nz)+") is not equally divisible in domains ("+to_string(config.Dx)+"x"+to_string(config.Dy)+"x"+to_string(config.Dz)+"). Changing resolution to ("+to_string(NDx)+"x"+to_string(NDy)+"x"+to_string(NDz)+").");
+	this->Nx = NDx; this->Ny = NDy; this->Nz = NDz;
+	this->Dx = config.Dx; this->Dy = config.Dy; this->Dz = config.Dz;
+	const uint D = config.Dx*config.Dy*config.Dz;
+	const uint Hx=config.Dx>1u, Hy=config.Dy>1u, Hz=config.Dz>1u; // halo offsets
+	const vector<Device_Info>& device_infos = smart_device_selection(D);
+	sanity_checks_constructor(device_infos, this->Nx, this->Ny, this->Nz, config.Dx, config.Dy, config.Dz, config.nu, config.fx, config.fy, config.fz, config.sigma, config.alpha, config.beta, config.particles_N, config.particles_rho, &config);
+	lbm_domain = new LBM_Domain*[D];
+	for(uint d=0u; d<D; d++) { // parallel_for((ulong)D, D, [&](ulong d) {
+		const uint x=((uint)d%(config.Dx*config.Dy))%config.Dx, y=((uint)d%(config.Dx*config.Dy))/config.Dx, z=(uint)d/(config.Dx*config.Dy); // d = x+(y+z*Dy)*Dx
+		lbm_domain[d] = new LBM_Domain(device_infos[d], config, this->Nx/config.Dx+2u*Hx, this->Ny/config.Dy+2u*Hy, this->Nz/config.Dz+2u*Hz, config.Dx, config.Dy, config.Dz, (int)(x*this->Nx/config.Dx)-(int)Hx, (int)(y*this->Ny/config.Dy)-(int)Hy, (int)(z*this->Nz/config.Dz)-(int)Hz);
+	} // });
+	{
+		Memory<float>** buffers_rho = new Memory<float>*[D];
+		for(uint d=0u; d<D; d++) buffers_rho[d] = &(lbm_domain[d]->rho);
+		rho = Memory_Container(this, buffers_rho, "rho");
+	} {
+		Memory<float>** buffers_u = new Memory<float>*[D];
+		for(uint d=0u; d<D; d++) buffers_u[d] = &(lbm_domain[d]->u);
+		u = Memory_Container(this, buffers_u, "u");
+	} {
+		Memory<uchar>** buffers_flags = new Memory<uchar>*[D];
+		for(uint d=0u; d<D; d++) buffers_flags[d] = &(lbm_domain[d]->flags);
+		flags = Memory_Container(this, buffers_flags, "flags");
+	} {
+#ifdef FORCE_FIELD
+		Memory<float>** buffers_F = new Memory<float>*[D];
+		for(uint d=0u; d<D; d++) buffers_F[d] = &(lbm_domain[d]->F);
+		F = Memory_Container(this, buffers_F, "F");
+#endif // FORCE_FIELD
+	} {
+#ifdef SURFACE
+		Memory<float>** buffers_phi = new Memory<float>*[D];
+		for(uint d=0u; d<D; d++) buffers_phi[d] = &(lbm_domain[d]->phi);
+		phi = Memory_Container(this, buffers_phi, "phi");
+#endif // SURFACE
+	} {
+#ifdef TEMPERATURE
+		Memory<float>** buffers_T = new Memory<float>*[D];
+		for(uint d=0u; d<D; d++) buffers_T[d] = &(lbm_domain[d]->T);
+		T = Memory_Container(this, buffers_T, "T");
+#endif // TEMPERATURE
+	} {
+#ifdef PARTICLES
+		particles = &(lbm_domain[0]->particles);
+#endif // PARTICLES
+	}
 }
 LBM::~LBM() {
-#ifdef GRAPHICS
-	camera.allow_rendering = false;
-#endif // GRAPHICS
 	info.print_finalize();
 	for(uint d=0u; d<get_D(); d++) delete lbm_domain[d];
 	delete[] lbm_domain;
 }
 
-void LBM::sanity_checks_constructor(const vector<Device_Info>& device_infos, const uint Nx, const uint Ny, const uint Nz, const uint Dx, const uint Dy, const uint Dz, const float nu, const float fx, const float fy, const float fz, const float sigma, const float alpha, const float beta, const uint particles_N, const float particles_rho) { // sanity checks on grid resolution and extension support
+void LBM::sanity_checks_constructor(const vector<Device_Info>& device_infos, const uint Nx, const uint Ny, const uint Nz, const uint Dx, const uint Dy, const uint Dz, const float nu, const float fx, const float fy, const float fz, const float sigma, const float alpha, const float beta, const uint particles_N, const float particles_rho, const SimulationConfig* cfg) { // sanity checks on grid resolution and extension support
 	if((ulong)Nx*(ulong)Ny*(ulong)Nz==0ull) print_error("Grid point number is 0: "+to_string(Nx)+"x"+to_string(Ny)+"x"+to_string(Nz)+" = 0.");
 	if(Dx*Dy*Dz==0u) print_error("You specified 0 LBM grid domains ("+to_string(Dx)+"x"+to_string(Dy)+"x"+to_string(Dz)+"). There has to be at least 1 domain in every direction. Check your input in LBM constructor.");
 	const uint local_Nx=Nx/Dx+2u*(Dx>1u), local_Ny=Ny/Dy+2u*(Dy>1u), local_Nz=Nz/Dz+2u*(Dz>1u);
@@ -801,32 +697,49 @@ void LBM::sanity_checks_constructor(const vector<Device_Info>& device_infos, con
 #elif defined(SRT)&&defined(TRT)
 	print_error("Too many LBM collision operators selected. Comment out either \"#define SRT\" or \"#define TRT\" in defines.hpp");
 #endif // SRT && TRT
-#ifndef VOLUME_FORCE
-	if(fx!=0.0f||fy!=0.0f||fz!=0.0f) print_error("Volume force is set in LBM constructor in main_setup(), but VOLUME_FORCE is not enabled. Uncomment \"#define VOLUME_FORCE\" in defines.hpp.");
-#else // VOLUME_FORCE
-#ifndef FORCE_FIELD
-	if(fx==0.0f&&fy==0.0f&&fz==0.0f) print_warning("The VOLUME_FORCE extension is enabled but the volume force in LBM constructor is set to zero. You may disable the extension by commenting out \"#define VOLUME_FORCE\" in defines.hpp.");
-#endif // FORCE_FIELD
-#endif // VOLUME_FORCE
-#ifndef SURFACE
-	if(sigma!=0.0f) print_error("Surface tension is set in LBM constructor in main_setup(), but SURFACE is not enabled. Uncomment \"#define SURFACE\" in defines.hpp.");
-#endif // SURFACE
-#ifndef TEMPERATURE
-	if(alpha!=0.0f||beta!=0.0f) print_error("Thermal diffusion/expansion coefficients are set in LBM constructor in main_setup(), but TEMPERATURE is not enabled. Uncomment \"#define TEMPERATURE\" in defines.hpp.");
-#else // TEMPERATURE
-	if(alpha==0.0f&&beta==0.0f) print_warning("The TEMPERATURE extension is enabled but the thermal diffusion/expansion coefficients alpha/beta in the LBM constructor are both set to zero. You may disable the extension by commenting out \"#define TEMPERATURE\" in defines.hpp.");
-#endif // TEMPERATURE
+	// Extension sanity checks - use runtime config if available, else compile-time defines
+	bool vol_ok = cfg ? cfg->volume_force :
+#ifdef VOLUME_FORCE
+		true;
+#else
+		false;
+#endif
+	if(!vol_ok && (fx!=0.0f||fy!=0.0f||fz!=0.0f))
+		print_error("Volume force is set in LBM constructor but VOLUME_FORCE is not enabled.");
+	bool surf_ok = cfg ? cfg->surface :
+#ifdef SURFACE
+		true;
+#else
+		false;
+#endif
+	if(!surf_ok && sigma!=0.0f)
+		print_error("Surface tension is set in LBM constructor but SURFACE is not enabled.");
+	bool temp_ok = cfg ? cfg->temperature :
+#ifdef TEMPERATURE
+		true;
+#else
+		false;
+#endif
+	if(!temp_ok && (alpha!=0.0f||beta!=0.0f))
+		print_error("Thermal diffusion/expansion coefficients are set but TEMPERATURE is not enabled.");
+	bool part_ok = cfg ? cfg->particles :
 #ifdef PARTICLES
-	if(particles_N==0u) print_error("The PARTICLES extension is enabled but the number of particles is set to 0. Comment out \"#define PARTICLES\" in defines.hpp.");
-#if !defined(VOLUME_FORCE)||!defined(FORCE_FIELD)
-	if(particles_rho!=1.0f) print_error("Particle density is set unequal to 1, but particle-fluid 2-way-coupling is not enabled. Uncomment both \"#define VOLUME_FORCE\" and \"#define FORCE_FIELD\" in defines.hpp.");
-#endif // !VOLUME_FORCE||!FORCE_FIELD
+		true;
+#else
+		false;
+#endif
+	if(part_ok && particles_N==0u)
+		print_error("The PARTICLES extension is enabled but the number of particles is set to 0.");
+	if(!part_ok && particles_N>0u)
+		print_error("The PARTICLES extension is disabled but the number of particles is set to "+to_string(particles_N)+">0.");
+	bool ff_ok = cfg ? cfg->force_field :
 #ifdef FORCE_FIELD
-	if(particles_rho==1.0f) print_warning("Particle density is set to 1, so particles behave as passive tracers without acting a force on the fluid, but particle-fluid 2-way-coupling is enabled. You may comment out \"#define FORCE_FIELD\" in defines.hpp.");
-#endif // FORCE_FIELD
-#else // PARTICLES
-	if(particles_N>0u) print_error("The PARTICLES extension is disabled but the number of particles is set to "+to_string(particles_N)+">0. Uncomment \"#define PARTICLES\" in defines.hpp.");
-#endif // PARTICLES
+		true;
+#else
+		false;
+#endif
+	if(part_ok && !vol_ok && !ff_ok && particles_rho!=1.0f)
+		print_error("Particle density is set unequal to 1, but 2-way-coupling is not enabled.");
 }
 
 void LBM::sanity_checks_initialization() { // sanity checks during initialization on used extensions based on used flags
@@ -918,9 +831,9 @@ void LBM::do_time_step() { // call kernel_stream_collide to perform one LBM time
 	for(uint d=0u; d<get_D(); d++) lbm_domain[d]->enqueue_surface_0();
 #endif // SURFACE
 	for(uint d=0u; d<get_D(); d++) lbm_domain[d]->enqueue_stream_collide(); // run LBM stream_collide kernel after domain communication
-#if defined(SURFACE) || defined(GRAPHICS)
-	communicate_rho_u_flags(); // rho/u/flags halo data is required for SURFACE extension, and u halo data is required for Q-criterion rendering
-#endif // SURFACE || GRAPHICS
+#ifdef SURFACE
+	communicate_rho_u_flags(); // rho/u/flags halo data is required for SURFACE extension
+#endif // SURFACE
 #ifdef SURFACE
 	for(uint d=0u; d<get_D(); d++) lbm_domain[d]->enqueue_surface_1();
 	communicate_flags();
@@ -931,9 +844,6 @@ void LBM::do_time_step() { // call kernel_stream_collide to perform one LBM time
 #endif // SURFACE
 	communicate_fi();
 #ifdef TEMPERATURE
-#ifdef GRAPHICS
-	communicate_T(); // T halo data is required for field_slice rendering
-#endif // GRAPHICS
 	communicate_gi();
 #endif // TEMPERATURE
 #ifdef PARTICLES
@@ -949,16 +859,9 @@ void LBM::run(const ulong steps, const ulong total_steps) { // initializes the L
 	if(!initialized) {
 		initialize();
 		info.print_initialize(this); // only print setup info if the setup is new (run() was not called before)
-#ifdef GRAPHICS
-		camera.allow_rendering = true;
-#endif // GRAPHICS
 	}
 	Clock clock;
 	for(ulong i=1ull; i<=steps; i++) {
-#if defined(INTERACTIVE_GRAPHICS)||defined(INTERACTIVE_GRAPHICS_ASCII)
-		while(!key_P&&running) sleep(0.016);
-		if(!running) break;
-#endif // INTERACTIVE_GRAPHICS_ASCII || INTERACTIVE_GRAPHICS
 		clock.start();
 		do_time_step();
 		info.update(clock.stop());
@@ -1012,9 +915,6 @@ void LBM::update_moving_boundaries() { // mark/unmark cells next to TYPE_S cells
 	for(uint d=0u; d<get_D(); d++) lbm_domain[d]->enqueue_update_moving_boundaries();
 	communicate_flags();
 	for(uint d=0u; d<get_D(); d++) lbm_domain[d]->finish_queue();
-#ifdef GRAPHICS
-	camera.key_update = true; // to prevent flickering of flags in interactive graphics when camera is not moved
-#endif // GRAPHICS
 }
 #endif // MOVING_BOUNDARIES
 
@@ -1023,10 +923,6 @@ void LBM::integrate_particles(const ulong steps, const ulong total_steps, const 
 	info.append(steps, total_steps, get_t());
 	Clock clock;
 	for(ulong i=1ull; i<=steps; i+=(ulong)time_step_multiplicator) {
-#if defined(INTERACTIVE_GRAPHICS)||defined(INTERACTIVE_GRAPHICS_ASCII)
-		while(!key_P&&running) sleep(0.016);
-		if(!running) break;
-#endif // INTERACTIVE_GRAPHICS_ASCII || INTERACTIVE_GRAPHICS
 		clock.start();
 		for(uint d=0u; d<get_D(); d++) lbm_domain[d]->enqueue_integrate_particles(time_step_multiplicator);
 		for(uint d=0u; d<get_D(); d++) lbm_domain[d]->finish_queue();
@@ -1136,164 +1032,8 @@ void LBM::voxelize_stl(const string& path, const float size, const uchar flag) {
 	voxelize_stl(path, center(), float3x3(1.0f), size, flag);
 }
 
-#ifdef GRAPHICS
-int* LBM::Graphics::draw_frame() {
-#ifndef UPDATE_FIELDS
-	if(visualization_modes&(VIS_FIELD|VIS_STREAMLINES|VIS_Q_CRITERION)) {
-		for(uint d=0u; d<lbm->get_D(); d++) lbm->lbm_domain[d]->enqueue_update_fields(); // only call update_fields() if the time step has changed since the last rendered frame
-	}
-#endif // UPDATE_FIELDS
-	if(key_1) { visualization_modes = (visualization_modes&~0b11)|(((visualization_modes&0b11)+1)%4); key_1 = false; }
-	if(key_2) { visualization_modes ^= VIS_FIELD        ; key_2 = false; }
-	if(key_3) { visualization_modes ^= VIS_STREAMLINES  ; key_3 = false; }
-	if(key_4) { visualization_modes ^= VIS_Q_CRITERION  ; key_4 = false; }
-	if(key_5) { visualization_modes ^= VIS_PHI_RASTERIZE; key_5 = false; }
-	if(key_6) { visualization_modes ^= VIS_PHI_RAYTRACE ; key_6 = false; }
-	if(key_7) { visualization_modes ^= VIS_PARTICLES    ; key_7 = false; }
-	if(key_T) {
-		slice_mode = (slice_mode+1)%8; key_T = false;
-	}
-	if(key_Z) {
-#ifndef TEMPERATURE
-		field_mode = (field_mode+1)%2; key_Z = false; // field_mode = { 0 (u), 1 (rho) }
-#else // TEMPERATURE
-		field_mode = (field_mode+1)%3; key_Z = false; // field_mode = { 0 (u), 1 (rho), 2 (T) }
-#endif // TEMPERATURE
-	}
-	if(slice_mode==1u) {
-		if(key_Q) { slice_x = clamp(slice_x-1, 0, (int)lbm->get_Nx()-1); key_Q = false; }
-		if(key_E) { slice_x = clamp(slice_x+1, 0, (int)lbm->get_Nx()-1); key_E = false; }
-	}
-	if(slice_mode==2u) {
-		if(key_Q) { slice_y = clamp(slice_y-1, 0, (int)lbm->get_Ny()-1); key_Q = false; }
-		if(key_E) { slice_y = clamp(slice_y+1, 0, (int)lbm->get_Ny()-1); key_E = false; }
-	}
-	if(slice_mode==3u) {
-		if(key_Q) { slice_z = clamp(slice_z-1, 0, (int)lbm->get_Nz()-1); key_Q = false; }
-		if(key_E) { slice_z = clamp(slice_z+1, 0, (int)lbm->get_Nz()-1); key_E = false; }
-	}
-	const bool visualization_change = camera.key_update||last_visualization_modes!=visualization_modes||last_field_mode!=field_mode||last_slice_mode!=slice_mode||last_slice_x!=slice_x||last_slice_y!=slice_y||last_slice_z!=slice_z;
-	camera.key_update = false;
-	last_visualization_modes = visualization_modes;
-	last_field_mode = field_mode;
-	last_slice_mode = slice_mode;
-	last_slice_x = slice_x;
-	last_slice_y = slice_y;
-	last_slice_z = slice_z;
-	bool new_frame = true;
-	for(uint d=0u; d<lbm->get_D(); d++) new_frame = new_frame && lbm->lbm_domain[d]->graphics.enqueue_draw_frame(visualization_modes, field_mode, slice_mode, slice_x, slice_y, slice_z, visualization_change);
-	for(uint d=0u; d<lbm->get_D(); d++) lbm->lbm_domain[d]->finish_queue();
-	int* bitmap = lbm->lbm_domain[0]->graphics.get_bitmap();
-	int* zbuffer = lbm->lbm_domain[0]->graphics.get_zbuffer();
-	for(uint d=1u; d<lbm->get_D()&&new_frame; d++) {
-		const int* const bitmap_d = lbm->lbm_domain[d]->graphics.get_bitmap(); // each domain renders its own frame
-		const int* const zbuffer_d = lbm->lbm_domain[d]->graphics.get_zbuffer();
-		for(uint i=0u; i<camera.width*camera.height; i++) {
-#ifndef GRAPHICS_TRANSPARENCY
-			const int zdi = zbuffer_d[i];
-			if(zdi>zbuffer[i]) {
-				bitmap[i] = bitmap_d[i]; // overlay frames using their z-buffers
-				zbuffer[i] = zdi;
-			}
-#else // GRAPHICS_TRANSPARENCY
-			bitmap[i] = color_add(bitmap[i], bitmap_d[i]);
-#endif // GRAPHICS_TRANSPARENCY
-		}
-	}
-	camera.allow_labeling = new_frame; // only print new label on frame if a new frame has been rendered
-	return bitmap;
-}
 
-void LBM::Graphics::set_camera_centered(const float rx, const float ry, const float fov, const float zoom) {
-	camera.free = false;
-	camera.rx = 0.5*pi+((double)rx*pi/180.0);
-	camera.ry = pi-((double)ry*pi/180.0);
-	camera.fov = clamp((float)fov, 1E-6f, 179.0f);
-	camera.set_zoom(0.5f*(float)fmax(fmax(lbm->get_Nx(), lbm->get_Ny()), lbm->get_Nz())/zoom);
-}
-void LBM::Graphics::set_camera_free(const float3& p, const float rx, const float ry, const float fov) {
-	camera.free = true;
-	camera.rx = 0.5*pi+((double)rx*pi/180.0);
-	camera.ry = pi-((double)ry*pi/180.0);
-	camera.fov = clamp((float)fov, 1E-6f, 179.0f);
-	camera.zoom = 1E16f;
-	camera.pos = p;
-}
-bool LBM::Graphics::next_frame(const ulong total_time_steps, const float video_length_seconds) { // returns true once simulation time has progressed enough to render the next video frame for a 60fps video of specified length
-	const uint new_frame = to_uint((float)lbm->get_t()/(float)total_time_steps*video_length_seconds*60.0f);
-	if(new_frame!=last_exported_frame) {
-		last_exported_frame = new_frame;
-		return true;
-	} else {
-		return false;
-	}
-}
-void LBM::Graphics::print_frame() { // preview current frame in console
-#ifndef INTERACTIVE_GRAPHICS_ASCII
-	camera.rendring_frame.lock(); // block rendering for other threads until finished
-	camera.key_update = true; // force rendering new frame
-	int* image_data = draw_frame(); // make sure the frame is fully rendered
-	Image* image = new Image(camera.width, camera.height, image_data);
-	info.allow_printing.lock();
-	println();
-	print_image(image);
-	info.allow_printing.unlock();
-	delete image;
-	camera.rendring_frame.unlock();
-#endif // INTERACTIVE_GRAPHICS_ASCII
-}
-void encode_image(Image* image, const string& filename, const string& extension, std::atomic_int* running_encoders) {
-	if(extension==".png") write_png(filename, image);
-	if(extension==".qoi") write_qoi(filename, image);
-	if(extension==".bmp") write_bmp(filename, image);
-	delete image; // delete image when done
-	(*running_encoders)--;
-}
-void LBM::Graphics::write_frame(const string& path, const string& name, const string& extension, bool print_preview) { // save current frame as .png file (smallest file size, but slow)
-	write_frame(0u, 0u, camera.width, camera.height, path, name, extension, print_preview);
-}
-void LBM::Graphics::write_frame(const uint x1, const uint y1, const uint x2, const uint y2, const string& path, const string& name, const string& extension, bool print_preview) { // save a cropped current frame with two corner points (x1,y1) and (x2,y2)
-	camera.rendring_frame.lock(); // block rendering for other threads until finished
-	camera.key_update = true; // force rendering new frame
-	int* image_data = draw_frame(); // make sure the frame is fully rendered
-	const string filename = default_filename(path, name, extension, lbm->get_t());
-	const uint xa=max(min(x1, x2), 0u), xb=min(max(x1, x2), camera.width ); // sort coordinates if necessary
-	const uint ya=max(min(y1, y2), 0u), yb=min(max(y1, y2), camera.height);
-	Image* image = new Image(xb-xa, yb-ya); // create local copy of frame buffer
-	for(uint y=0u; y<image->height(); y++) for(uint x=0u; x<image->width(); x++) image->set_color(x, y, image_data[camera.width*(ya+y)+(xa+x)]);
-#ifndef INTERACTIVE_GRAPHICS_ASCII
-	if(print_preview) {
-		info.allow_printing.lock();
-		println();
-		print_image(image);
-		print_info("Image \""+filename+"\" saved.");
-		info.allow_printing.unlock();
-	}
-#endif // INTERACTIVE_GRAPHICS_ASCII
-	running_encoders++;
-	thread encoder(encode_image, image, filename, extension, &running_encoders); // the main bottleneck in rendering images to the hard disk is .png encoding, so encode image in new thread
-	encoder.detach(); // detatch thread so it can run concurrently
-	camera.rendring_frame.unlock();
-}
-void LBM::Graphics::write_frame_png(const string& path, bool print_preview) { // save current frame as .png file (smallest file size, but slow)
-	write_frame(path, "image", ".png", print_preview);
-}
-void LBM::Graphics::write_frame_qoi(const string& path, bool print_preview) { // save current frame as .qoi file (small file size, fast)
-	write_frame(path, "image", ".qoi", print_preview);
-}
-void LBM::Graphics::write_frame_bmp(const string& path, bool print_preview) { // save current frame as .bmp file (large file size, fast)
-	write_frame(path, "image", ".bmp", print_preview);
-}
-void LBM::Graphics::write_frame_png(const uint x1, const uint y1, const uint x2, const uint y2, const string& path, bool print_preview) { // save current frame as .png file (smallest file size, but slow)
-	write_frame(x1, y1, x2, y2, path, "image", ".png", print_preview);
-}
-void LBM::Graphics::write_frame_qoi(const uint x1, const uint y1, const uint x2, const uint y2, const string& path, bool print_preview) { // save current frame as .qoi file (small file size, fast)
-	write_frame(x1, y1, x2, y2, path, "image", ".qoi", print_preview);
-}
-void LBM::Graphics::write_frame_bmp(const uint x1, const uint y1, const uint x2, const uint y2, const string& path, bool print_preview) { // save current frame as .bmp file (large file size, fast)
-	write_frame(x1, y1, x2, y2, path, "image", ".bmp", print_preview);
-}
-#endif // GRAPHICS
+
 
 
 
@@ -1303,8 +1043,8 @@ void LBM_Domain::allocate_transfer(Device& device) { // allocate all memory for 
 	if(Dy>1u) Amax = max(Amax, (ulong)Nz*(ulong)Nx); // Ay
 	if(Dz>1u) Amax = max(Amax, (ulong)Nx*(ulong)Ny); // Az
 
-	transfer_buffer_p = Memory<char>(device, Amax, max(transfers*(uint)sizeof(fpxx), 17u), true, true, 0, false); // only allocate one set of transfer buffers in plus/minus directions, for all x/y/z transfers
-	transfer_buffer_m = Memory<char>(device, Amax, max(transfers*(uint)sizeof(fpxx), 17u), true, true, 0, false); // these transfer buffers must not be zero-copy!
+	transfer_buffer_p = Memory<char>(device, Amax, max(trans*(uint)sizeof(fpxx), 17u), true, true, 0, false); // only allocate one set of transfer buffers in plus/minus directions, for all x/y/z transfers
+	transfer_buffer_m = Memory<char>(device, Amax, max(trans*(uint)sizeof(fpxx), 17u), true, true, 0, false); // these transfer buffers must not be zero-copy!
 
 	kernel_transfer[enum_transfer_field::fi              ][0] = Kernel(device, 0ull, "transfer_extract_fi"              , 0u, t, transfer_buffer_p, transfer_buffer_m, fi);
 	kernel_transfer[enum_transfer_field::fi              ][1] = Kernel(device, 0ull, "transfer__insert_fi"              , 0u, t, transfer_buffer_p, transfer_buffer_m, fi);
@@ -1375,7 +1115,7 @@ void LBM::communicate_field(const enum_transfer_field field, const uint bytes_pe
 }
 
 void LBM::communicate_fi() {
-	communicate_field(enum_transfer_field::fi, transfers*sizeof(fpxx));
+	communicate_field(enum_transfer_field::fi, lbm_domain[0]->get_transfers()*sizeof(fpxx));
 }
 void LBM::communicate_rho_u_flags() {
 	communicate_field(enum_transfer_field::rho_u_flags, 17u);
