@@ -611,6 +611,7 @@ public:
 	inline void enqueue_write_to_device(const ulong offset, const ulong length, const vector<Event>* event_waitlist=nullptr, Event* event_returned=nullptr) { write_to_device(offset, length, false, event_waitlist, event_returned); }
 	inline void finish_queue() { cl_queue.finish(); }
 	inline const cl::Buffer& get_cl_buffer() const { return device_buffer; }
+	inline cl_mem get_cl_mem_handle() const { return *(cl_mem*)(void*)&device_buffer; } // extract raw handle for GL interop
 };
 
 class Kernel {

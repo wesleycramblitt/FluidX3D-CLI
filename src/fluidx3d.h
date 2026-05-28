@@ -148,6 +148,32 @@ float fluidx3d_get_Re_max(const FluidX3D_Solver* solver);
 /** Get a default configuration matching the compile-time defines. */
 FluidX3D_Config fluidx3d_default_config(void);
 
+/* ── OpenCL Interop (for GPU→GPU data sharing with OpenGL) ── */
+
+/** Number of GPU devices/domains. */
+int fluidx3d_get_device_count(const FluidX3D_Solver* solver);
+
+/** Get the raw OpenCL cl_mem handle for a field's device buffer.
+ *  Returns 0 if the field is not available.
+ *  device_index: 0-based domain/GPU index (0 for single-GPU).
+ *  component: for vector fields (U, FORCE): 0=x, 1=y, 2=z.
+ *             for scalar fields (RHO, FLAGS, PHI, TEMP): use 0.
+ *  out_size_bytes: if non-NULL, receives the buffer size in bytes.
+ *
+ *  Usage from OpenGL/C:
+ *    cl_mem buf = (cl_mem)(intptr_t)fluidx3d_get_cl_mem_handle(s, FLD, 0, 0, &sz);
+ *    cl_mem gl_buf = clCreateFromGLBuffer(ctx, CL_MEM_READ_WRITE, gl_buf_id, &err);
+ *    clEnqueueAcquireGLObjects(q, 1, &gl_buf, 0, NULL, NULL);
+ *    clEnqueueCopyBuffer(q, (cl_mem)handle, gl_buf, 0, 0, sz, 0, NULL, NULL);
+ *    clEnqueueReleaseGLObjects(q, 1, &gl_buf, 0, NULL, NULL); */
+intptr_t fluidx3d_get_cl_mem_handle(const FluidX3D_Solver* solver, int field_id,
+                                     int device_index, int component,
+                                     uint64_t* out_size_bytes);
+
+/** Get the OpenCL command queue (as intptr_t to cast to cl_command_queue).
+ *  device_index: 0-based domain/GPU index. */
+intptr_t fluidx3d_get_cl_queue_handle(const FluidX3D_Solver* solver, int device_index);
+
 #ifdef __cplusplus
 }
 #endif

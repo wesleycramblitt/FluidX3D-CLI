@@ -358,3 +358,73 @@ void fluidx3d_export_vtk(FluidX3D_Solver* solver, int field_id, const char* path
 float fluidx3d_get_nu(const FluidX3D_Solver* solver)  { return solver&&solver->lbm ? solver->lbm->get_nu() : 0.0f; }
 float fluidx3d_get_tau(const FluidX3D_Solver* solver) { return solver&&solver->lbm ? solver->lbm->get_tau() : 0.0f; }
 float fluidx3d_get_Re_max(const FluidX3D_Solver* solver) { return solver&&solver->lbm ? solver->lbm->get_Re_max() : 0.0f; }
+
+int fluidx3d_get_device_count(const FluidX3D_Solver* solver) {
+	if(!solver || !solver->lbm) return 0;
+	return (int)solver->lbm->get_D();
+}
+
+intptr_t fluidx3d_get_cl_mem_handle(const FluidX3D_Solver* solver, int field_id,
+                                     int device_index, int component,
+                                     uint64_t* out_size_bytes) {
+	if(!solver || !solver->lbm) return 0;
+	if(device_index < 0 || (uint)device_index >= (int)solver->lbm->get_D()) return 0;
+
+	LBM_Domain* dom = solver->lbm->lbm_domain[device_index];
+
+	// For velocity (U), each component is a separate buffer (x, y, z)
+	if(field_id == FLUIDX3D_FIELD_U && component >= 0 && component <= 2) {
+		// u is Memory<float> with dimensions=3, stored interleaved per-domain.
+		// The device buffer contains all 3 components. For component access,
+		// we return the whole buffer and tell the caller the per-component offset.
+		Memory<float>* mem = &dom->u;
+		ulong N = dom->get_N();
+		if(out_size_bytes) *out_size_bytes = N * sizeof(float);
+		// The caller needs to offset by component * N * sizeof(float) when reading
+		// For raw cl_mem, return the base buffer handle
+		return (intptr_t)mem->get_cl_mem_handle();
+	}
+#ifdef FORCE_FIELD
+	if(field_id == FLUIDX3D_FIELD_FORCE && component >= 0 && component <= 2) {
+		Memory<float>* mem = &dom->F;
+		ulong N = dom->get_N();
+		if(out_size_bytes) *out_size_bytes = N * sizeof(float);
+		return (intptr_t)mem->get_cl_mem_handle();
+	}
+#endif
+
+	// Scalar fields
+	if(field_id == FLUIDX3D_FIELD_RHO) {
+		ulong N = dom->get_N();
+		if(out_size_bytes) *out_size_bytes = N * sizeof(float);
+		return (intptr_t)dom->rho.get_cl_mem_handle();
+	}
+	if(field_id == FLUIDX3D_FIELD_FLAGS) {
+		ulong N = dom->get_N();
+		if(out_size_bytes) *out_size_bytes = N * sizeof(uchar);
+		return (intptr_t)dom->flags.get_cl_mem_handle();
+	}
+#ifdef SURFACE
+	if(field_id == FLUIDX3D_FIELD_PHI) {
+		ulong N = dom->get_N();
+		if(out_size_bytes) *out_size_bytes = N * sizeof(float);
+		return (intptr_t)dom->phi.get_cl_mem_handle();
+	}
+#endif
+#ifdef TEMPERATURE
+	if(field_id == FLUIDX3D_FIELD_TEMP) {
+		ulong N = dom->get_N();
+		if(out_size_bytes) *out_size_bytes = N * sizeof(float);
+		return (intptr_t)dom->T.get_cl_mem_handle();
+	}
+#endif
+	return 0;
+}
+
+intptr_t fluidx3d_get_cl_queue_handle(const FluidX3D_Solver* solver, int device_index) {
+	if(!solver || !solver->lbm) return 0;
+	if(device_index < 0 || (uint)device_index >= solver->lbm->get_D()) return 0;
+	// cl::CommandQueue stores cl_command_queue as first member
+	const cl::CommandQueue& q = solver->lbm->lbm_domain[device_index]->get_device().get_cl_queue();
+	return (intptr_t)*(cl_command_queue*)(void*)&q;
+}
